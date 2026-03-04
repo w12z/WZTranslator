@@ -32,7 +32,7 @@ class DataDownloader:
 
     def download_audio(self, url, filename, area='', retries=1):
         """
-        下载音频文件到本地audio/地区目录，失败重试三次
+        下载音频文件到本地audio/地区目录，失败重试一次
         """
         if not url or not url.startswith('http'):
             return False
@@ -49,11 +49,23 @@ class DataDownloader:
                 with open(filepath, 'wb') as f:
                     f.write(r.content)
                 logging.info(f"音频已下载: {filepath}")
+                import subprocess
+                try:
+                    final_filepath = os.path.splitext(filepath)[0] + '_final.wav'
+                    subprocess.run(
+                        ['ffmpeg', '-y', '-i', filepath, '-ac', '1', '-ar', '16000', '-vn', final_filepath],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True
+                    )
+                    os.remove(filepath)  # 删除原文件
+                    logging.info(f"音频已转码: {filepath}")
+                except Exception as e:
+                    logging.warning(f"音频转码失败: {e}")
                 return True
             except Exception as e:
                 logging.warning(f"音频下载失败(第{attempt}次): {url} -> {e}")
                 time.sleep(2)
         logging.error(f"音频最终下载失败: {url}")
+
         return False
 
     def fetch_page(self, url, retries=3):
@@ -130,7 +142,7 @@ class DataDownloader:
 
     def run(self, start_url=None, csv_file='output.csv'):
         """
-        主执行流程，自动翻页，保存为CSV
+        主执行流程，自动翻页，保存为CSV（每页保存一次）
         """
         url = start_url or self.base_url
         html_content = self.fetch_page(url)
@@ -139,22 +151,31 @@ class DataDownloader:
             return
         total_pages = 4439
         logging.info(f"共 {total_pages} 页")
-        all_data = []
+        
+        # 预先定义好 CSV 的字段名
+        fieldnames = ['序号', '地区', '字项', '义项', '读音', '备注', '本地文件名']
+        
+        # 初始化CSV文件，写入表头
+        with open(csv_file, 'w', newline='', encoding='utf-8-sig') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+
         for page in range(1, total_pages + 1):
             page_url = url if page == 1 else f"{url}/{page}"
             logging.info(f"抓取第 {page} 页: {page_url}")
             html = self.fetch_page(page_url)
             page_data = self.parse_data(html)
-            all_data.extend(page_data)
+            
+            if page_data:
+                # 使用追加模式 'a' 将这一页的数据写入 CSV
+                with open(csv_file, 'a', newline='', encoding='utf-8-sig') as f:
+                    writer = csv.DictWriter(f, fieldnames=fieldnames)
+                    writer.writerows(page_data)
+                logging.info(f"第 {page} 页已保存 {len(page_data)} 条。")
+                
             time.sleep(1)
-        if all_data:
-            with open(csv_file, 'w', newline='', encoding='utf-8-sig') as f:
-                writer = csv.DictWriter(f, fieldnames=all_data[0].keys())
-                writer.writeheader()
-                writer.writerows(all_data)
-            logging.info(f"已保存 {len(all_data)} 条到 {csv_file}，音频保存在 {self.audio_dir}/")
-        else:
-            logging.warning("未抓取到任何数据")
+            
+        logging.info(f"全部保存完成，音频保存在 {self.audio_dir}/")
 
 if __name__ == "__main__":
     # 目标网址可自定义
